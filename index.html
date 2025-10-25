@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fortnite-like 3D Game in HTML/JS</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #joystick-left {
+            position: absolute;
+            bottom: 50px;
+            left: 50px;
+            width: 150px;
+            height: 150px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            touch-action: none;
+        }
+        #joystick-right {
+            position: absolute;
+            bottom: 50px;
+            right: 50px;
+            width: 150px;
+            height: 150px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            touch-action: none;
+        }
+        .action-buttons {
+            position: absolute;
+            bottom: 220px;
+            right: 10px;
+            display: flex;
+            flex-direction: column;
+        }
+        button {
+            margin: 5px;
+            padding: 10px;
+            font-size: 16px;
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            touch-action: manipulation;
+        }
+    </style>
+</head>
+<body>
+    <div id="joystick-left"></div>
+    <div id="joystick-right"></div>
+    <div class="action-buttons">
+        <button id="jump">Jump</button>
+        <button id="shoot">Shoot</button>
+        <button id="sprint">Run</button>
+        <button id="build">Build</button>
+        <button id="slide">Slide</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer, player, clock;
+        let velocity = new THREE.Vector3();
+        let direction = new THREE.Vector3();
+        let projectiles = [];
+        let yaw = 0;
+        let pitch = 0;
+        let moveSpeed = 5;
+        let isSprinting = false;
+        let isJumping = false;
+        let isSliding = false;
+        let leftJoystickTouchId = null;
+        let rightJoystickTouchId = null;
+        let leftStartX, leftStartY;
+        let rightStartX, rightStartY;
+
+        init();
+        animate();
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+            clock = new THREE.Clock();
+
+            // Ground
+            const groundGeometry = new THREE.PlaneGeometry(200, 200);
+            const groundMaterial = new THREE.MeshBasicMaterial({ color: 0x228b22, side: THREE.DoubleSide });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            scene.add(ground);
+
+            // Player
+            const playerGeometry = new THREE.BoxGeometry(1, 2, 1);
+            const playerMaterial = new THREE.MeshBasicMaterial({ color: 0xff4500 });
+            player = new THREE.Mesh(playerGeometry, playerMaterial);
+            player.position.y = 1;
+            scene.add(player);
+
+            // Light
+            const light = new THREE.AmbientLight(0xffffff, 1);
+            scene.add(light);
+
+            // Controls setup
+            setupTouchControls();
+            setupKeyboardControls();
+            setupMouseControls();
+
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        function setupTouchControls() {
+            const joystickLeft = document.getElementById('joystick-left');
+            const joystickRight = document.getElementById('joystick-right');
+
+            joystickLeft.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const touch = e.touches[0];
+                leftStartX = touch.clientX;
+                leftStartY = touch.clientY;
+                leftJoystickTouchId = touch.identifier;
+            });
+
+            joystickRight.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const touch = e.touches[0];
+                rightStartX = touch.clientX;
+                rightStartY = touch.clientY;
+                rightJoystickTouchId = touch.identifier;
+            });
+
+            document.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                for (let touch of e.touches) {
+                    if (touch.identifier === leftJoystickTouchId) {
+                        let dx = touch.clientX - leftStartX;
+                        let dy = touch.clientY - leftStartY;
+                        let distance = Math.sqrt(dx * dx + dy * dy);
+                        let angle = Math.atan2(dy, dx);
+                        if (distance > 75) distance = 75; // Clamp to radius
+                        direction.x = (dx / 75);
+                        direction.z = (dy / 75);
+                    }
+                    if (touch.identifier === rightJoystickTouchId) {
+                        let dx = touch.clientX - rightStartX;
+                        let dy = touch.clientY - rightStartY;
+                        yaw -= dx * 0.002;
+                        pitch -= dy * 0.002;
+                        pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitch));
+                        rightStartX = touch.clientX;
+                        rightStartY = touch.clientY;
+                    }
+                }
+            }, { passive: false });
+
+            document.addEventListener('touchend', (e) => {
+                for (let touch of e.changedTouches) {
+                    if (touch.identifier === leftJoystickTouchId) {
+                        direction.x = 0;
+                        direction.z = 0;
+                        leftJoystickTouchId = null;
+                    }
+                    if (touch.identifier === rightJoystickTouchId) {
+                        rightJoystickTouchId = null;
+                    }
+                }
+            });
+
+            // Action buttons
+            document.getElementById('jump').addEventListener('touchstart', () => isJumping = true);
+            document.getElementById('shoot').addEventListener('touchstart', shoot);
+            document.getElementById('sprint').addEventListener('touchstart', () => isSprinting = true);
+            document.getElementById('sprint').addEventListener('touchend', () => isSprinting = false);
+            document.getElementById('build').addEventListener('touchstart', build);
+            document.getElementById('slide').addEventListener('touchstart', slide);
+        }
+
+        function setupKeyboardControls() {
+            const keys = {};
+            document.addEventListener('keydown', (e) => {
+                keys[e.key.toLowerCase()] = true;
+                if (e.key === ' ') isJumping = true;
+                if (e.key.toLowerCase() === 'f') shoot();
+                if (e.key.toLowerCase() === 'b') build();
+                if (e.key.toLowerCase() === 'c') slide();
+            });
+            document.addEventListener('keyup', (e) => {
+                keys[e.key.toLowerCase()] = false;
+            });
+
+            // In animate, check keys for direction
+            // This will be handled in updateMovement
+        }
+
+        function setupMouseControls() {
+            document.addEventListener('mousemove', (e) => {
+                if (document.pointerLockElement === renderer.domElement) {
+                    yaw -= e.movementX * 0.002;
+                    pitch -= e.movementY * 0.002;
+                    pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitch));
+                }
+            });
+            renderer.domElement.addEventListener('click', () => {
+                renderer.domElement.requestPointerLock();
+            });
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function updateMovement(delta) {
+            const currentSpeed = isSliding ? 15 : (isSprinting ? 8 : 5);
+            velocity.x = 0;
+            velocity.z = 0;
+
+            // From joystick
+            if (direction.x !== 0 || direction.z !== 0) {
+                let moveDirection = new THREE.Vector3(direction.x, 0, direction.z).normalize().multiplyScalar(currentSpeed);
+                moveDirection.applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+                velocity.x = moveDirection.x;
+                velocity.z = moveDirection.z;
+            }
+
+            // From keyboard (override or add if no joystick)
+            const keys = document.keys || {}; // Assuming keys from keydown
+            let keyDirection = new THREE.Vector3();
+            if (keys['w'] || keys['arrowup']) keyDirection.z -= 1;
+            if (keys['s'] || keys['arrowdown']) keyDirection.z += 1;
+            if (keys['a'] || keys['arrowleft']) keyDirection.x -= 1;
+            if (keys['d'] || keys['arrowright']) keyDirection.x += 1;
+            if (keys['shift']) isSprinting = true; else isSprinting = false;
+            if (keyDirection.length() > 0) {
+                keyDirection.normalize().multiplyScalar(currentSpeed);
+                keyDirection.applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+                velocity.x = keyDirection.x;
+                velocity.z = keyDirection.z;
+            }
+
+            player.position.x += velocity.x * delta;
+            player.position.z += velocity.z * delta;
+            player.rotation.y = yaw;
+        }
+
+        function updatePhysics(delta) {
+            velocity.y -= 9.81 * delta;
+            player.position.y += velocity.y * delta;
+
+            const onGround = player.position.y <= 1;
+            if (onGround) {
+                player.position.y = 1;
+                velocity.y = 0;
+                if (isJumping) {
+                    velocity.y = 7;
+                    isJumping = false;
+                }
+            }
+        }
+
+        function updateCamera() {
+            const offset = new THREE.Vector3(0, 5, 10).applyEuler(new THREE.Euler(pitch, yaw, 0, 'XYZ'));
+            camera.position.copy(player.position).add(offset);
+            camera.lookAt(player.position.clone().add(new THREE.Vector3(0, 1, 0)));
+        }
+
+        function updateProjectiles(delta) {
+            for (let i = projectiles.length - 1; i >= 0; i--) {
+                const proj = projectiles[i];
+                proj.position.add(proj.velocity.clone().multiplyScalar(delta));
+                if (proj.position.length() > 200) {
+                    scene.remove(proj);
+                    projectiles.splice(i, 1);
+                }
+            }
+        }
+
+        function shoot() {
+            const geometry = new THREE.SphereGeometry(0.2, 16, 16);
+            const material = new THREE.MeshBasicMaterial({ color: 0x0000ff });
+            const bullet = new THREE.Mesh(geometry, material);
+            bullet.position.copy(player.position.clone().add(new THREE.Vector3(0, 1, 0)));
+            const shootDirection = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(pitch, yaw, 0));
+            bullet.velocity = shootDirection.multiplyScalar(50);
+            scene.add(bullet);
+            projectiles.push(bullet);
+        }
+
+        function build() {
+            const geometry = new THREE.BoxGeometry(3, 3, 0.5);
+            const material = new THREE.MeshBasicMaterial({ color: 0x808080 });
+            const wall = new THREE.Mesh(geometry, material);
+            const buildOffset = new THREE.Vector3(0, 0, -4).applyEuler(new THREE.Euler(0, yaw, 0));
+            wall.position.copy(player.position).add(buildOffset);
+            wall.position.y = 1.5;
+            wall.rotation.y = yaw;
+            scene.add(wall);
+        }
+
+        function slide() {
+            if (isSliding) return;
+            isSliding = true;
+            player.scale.y = 0.5;
+            player.position.y = 0.5;
+            setTimeout(() => {
+                isSliding = false;
+                player.scale.y = 1;
+                player.position.y = 1;
+            }, 1000);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+
+            updateMovement(delta);
+            updatePhysics(delta);
+            updateCamera();
+            updateProjectiles(delta);
+
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
