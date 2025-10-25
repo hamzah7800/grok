@@ -3,326 +3,458 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fortnite-like 3D Game in HTML/JS</title>
+    <title>Fortnite-like 3D Game</title>
     <style>
         body { margin: 0; overflow: hidden; }
         canvas { display: block; }
-        #joystick-left {
+        .joystick {
             position: absolute;
-            bottom: 50px;
-            left: 50px;
+            bottom: 20%;
             width: 150px;
             height: 150px;
-            background: rgba(255, 255, 255, 0.2);
+            background: rgba(255, 255, 255, 0.1);
             border-radius: 50%;
             touch-action: none;
         }
-        #joystick-right {
+        #joystick-left { left: 5%; }
+        #joystick-right { right: 5%; }
+        .joystick-thumb {
             position: absolute;
-            bottom: 50px;
-            right: 50px;
-            width: 150px;
-            height: 150px;
-            background: rgba(255, 255, 255, 0.2);
+            width: 60px;
+            height: 60px;
+            background: rgba(255, 255, 255, 0.3);
             border-radius: 50%;
-            touch-action: none;
+            transform: translate(-50%, -50%);
         }
         .action-buttons {
             position: absolute;
-            bottom: 220px;
-            right: 10px;
+            bottom: 30%;
+            right: 5%;
             display: flex;
             flex-direction: column;
+            align-items: flex-end;
         }
         button {
-            margin: 5px;
-            padding: 10px;
-            font-size: 16px;
-            background: rgba(0, 0, 0, 0.5);
+            margin: 10px 0;
+            padding: 15px;
+            font-size: 18px;
+            background: rgba(0, 0, 0, 0.3);
             color: white;
             border: none;
-            border-radius: 5px;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
             touch-action: manipulation;
+            opacity: 0.7;
         }
     </style>
 </head>
 <body>
-    <div id="joystick-left"></div>
-    <div id="joystick-right"></div>
+    <div class="joystick" id="joystick-left">
+        <div class="joystick-thumb" id="thumb-left"></div>
+    </div>
+    <div class="joystick" id="joystick-right">
+        <div class="joystick-thumb" id="thumb-right"></div>
+    </div>
     <div class="action-buttons">
-        <button id="jump">Jump</button>
-        <button id="shoot">Shoot</button>
-        <button id="sprint">Run</button>
-        <button id="build">Build</button>
-        <button id="slide">Slide</button>
+        <button id="jump">⬆️</button>
+        <button id="shoot">🔫</button>
+        <button id="sprint">🏃</button>
+        <button id="wall">🧱</button>
+        <button id="floor">📐</button>
+        <button id="ramp">↗️</button>
+        <button id="slide">↘️</button>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/loaders/GLTFLoader.js"></script>
     <script>
-        let scene, camera, renderer, player, clock;
-        let velocity = new THREE.Vector3();
-        let direction = new THREE.Vector3();
-        let projectiles = [];
-        let yaw = 0;
-        let pitch = 0;
-        let moveSpeed = 5;
-        let isSprinting = false;
-        let isJumping = false;
-        let isSliding = false;
-        let leftJoystickTouchId = null;
-        let rightJoystickTouchId = null;
-        let leftStartX, leftStartY;
-        let rightStartX, rightStartY;
+        // Game state
+        const gameState = {
+            scene: null,
+            camera: null,
+            renderer: null,
+            player: null,
+            gun: null,
+            clock: new THREE.Clock(),
+            velocity: new THREE.Vector3(),
+            direction: new THREE.Vector3(),
+            projectiles: [],
+            yaw: 0,
+            pitch: 0,
+            moveSpeed: 5,
+            isSprinting: false,
+            isJumping: false,
+            isSliding: false,
+            slideTimer: 0,
+            leftTouchId: null,
+            rightTouchId: null,
+            leftStart: new THREE.Vector2(),
+            rightStart: new THREE.Vector2(),
+            leftThumb: document.getElementById('thumb-left'),
+            rightThumb: document.getElementById('thumb-right'),
+            buildMaterial: new THREE.MeshStandardMaterial({ color: 0x808080 }),
+            buildings: [],
+            keys: {}
+        };
 
-        init();
-        animate();
+        // Scene setup
+        function setupScene() {
+            gameState.scene = new THREE.Scene();
+            gameState.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            gameState.renderer = new THREE.WebGLRenderer();
+            gameState.renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(gameState.renderer.domElement);
 
-        function init() {
-            scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            renderer = new THREE.WebGLRenderer();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            document.body.appendChild(renderer.domElement);
-            clock = new THREE.Clock();
+            // Lights
+            gameState.scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(1, 1, 1);
+            gameState.scene.add(directionalLight);
 
             // Ground
-            const groundGeometry = new THREE.PlaneGeometry(200, 200);
-            const groundMaterial = new THREE.MeshBasicMaterial({ color: 0x228b22, side: THREE.DoubleSide });
-            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            const textureLoader = new THREE.TextureLoader();
+            const grassDiffuse = textureLoader.load('https://threejs.org/examples/textures/terrain/grasslight-big.jpg');
+            grassDiffuse.repeat.set(50, 50);
+            grassDiffuse.wrapS = grassDiffuse.wrapT = THREE.RepeatWrapping;
+            const groundMaterial = new THREE.MeshStandardMaterial({ map: grassDiffuse, roughness: 0.8 });
+            const ground = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), groundMaterial);
             ground.rotation.x = -Math.PI / 2;
-            scene.add(ground);
-
-            // Player
-            const playerGeometry = new THREE.BoxGeometry(1, 2, 1);
-            const playerMaterial = new THREE.MeshBasicMaterial({ color: 0xff4500 });
-            player = new THREE.Mesh(playerGeometry, playerMaterial);
-            player.position.y = 1;
-            scene.add(player);
-
-            // Light
-            const light = new THREE.AmbientLight(0xffffff, 1);
-            scene.add(light);
-
-            // Controls setup
-            setupTouchControls();
-            setupKeyboardControls();
-            setupMouseControls();
-
-            window.addEventListener('resize', onWindowResize, false);
+            gameState.scene.add(ground);
         }
 
-        function setupTouchControls() {
+        // Create player with custom geometry
+        function createPlayer() {
+            const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
+
+            // Body (cylinder)
+            const bodyGeometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 16);
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.position.y = 1;
+
+            // Head
+            const headGeometry = new THREE.SphereGeometry(0.3, 16, 16);
+            const head = new THREE.Mesh(headGeometry, bodyMaterial);
+            head.position.y = 1.2;
+
+            // Arms
+            const armGeometry = new THREE.CylinderGeometry(0.15, 0.15, 0.5, 16);
+            const leftArm = new THREE.Mesh(armGeometry, bodyMaterial);
+            leftArm.position.set(-0.5, 0.8, 0);
+            const rightArm = new THREE.Mesh(armGeometry, bodyMaterial);
+            rightArm.position.set(0.5, 0.8, 0);
+
+            // Legs
+            const legGeometry = new THREE.CylinderGeometry(0.2, 0.2, 0.7, 16);
+            const leftLeg = new THREE.Mesh(legGeometry, bodyMaterial);
+            leftLeg.position.set(-0.25, 0.2, 0);
+            const rightLeg = new THREE.Mesh(legGeometry, bodyMaterial);
+            rightLeg.position.set(0.25, 0.2, 0);
+
+            // Group as player
+            gameState.player = new THREE.Group();
+            gameState.player.add(body, head, leftArm, rightArm, leftLeg, rightLeg);
+            gameState.player.position.y = 1;
+            gameState.scene.add(gameState.player);
+
+            // Gun
+            const gunGeometry = new THREE.BoxGeometry(0.1, 0.1, 0.5);
+            gameState.gun = new THREE.Mesh(gunGeometry, bodyMaterial);
+            gameState.gun.position.set(0.5, 1, -0.5);
+            gameState.gun.rotation.y = Math.PI / 2;
+            gameState.player.add(gameState.gun);
+        }
+
+        // Create buildings
+        function createBuildings() {
+            const loader = new THREE.GLTFLoader();
+            for (let i = 0; i < 5; i++) {
+                const houseGeometry = new THREE.BoxGeometry(10, 10, 10);
+                const houseMaterial = new THREE.MeshStandardMaterial({ color: 0x8b4513 });
+                const house = new THREE.Mesh(houseGeometry, houseMaterial);
+                house.position.set(Math.random() * 200 - 100, 5, Math.random() * 200 - 100);
+                gameState.scene.add(house);
+                gameState.buildings.push(house);
+            }
+
+            loader.load(
+                'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/main/2.0/Lantern/glTF/Lantern.gltf',
+                (gltf) => {
+                    gameState.buildings.forEach((house) => gameState.scene.remove(house));
+                    gameState.buildings = [];
+                    const houseTemplate = gltf.scene;
+                    houseTemplate.scale.set(5, 5, 5);
+                    for (let i = 0; i < 5; i++) {
+                        const house = houseTemplate.clone();
+                        house.position.set(Math.random() * 200 - 100, 0, Math.random() * 200 - 100);
+                        gameState.scene.add(house);
+                        gameState.buildings.push(house);
+                    }
+                },
+                undefined,
+                (err) => console.error('Failed to load house model:', err)
+            );
+        }
+
+        // Setup controls
+        function setupControls() {
             const joystickLeft = document.getElementById('joystick-left');
             const joystickRight = document.getElementById('joystick-right');
 
             joystickLeft.addEventListener('touchstart', (e) => {
                 e.preventDefault();
                 const touch = e.touches[0];
-                leftStartX = touch.clientX;
-                leftStartY = touch.clientY;
-                leftJoystickTouchId = touch.identifier;
+                gameState.leftStart.set(touch.clientX, touch.clientY);
+                gameState.leftTouchId = touch.identifier;
+                updateThumb(gameState.leftThumb, 75, 75);
             });
 
             joystickRight.addEventListener('touchstart', (e) => {
                 e.preventDefault();
                 const touch = e.touches[0];
-                rightStartX = touch.clientX;
-                rightStartY = touch.clientY;
-                rightJoystickTouchId = touch.identifier;
+                gameState.rightStart.set(touch.clientX, touch.clientY);
+                gameState.rightTouchId = touch.identifier;
+                updateThumb(gameState.rightThumb, 75, 75);
             });
 
             document.addEventListener('touchmove', (e) => {
                 e.preventDefault();
                 for (let touch of e.touches) {
-                    if (touch.identifier === leftJoystickTouchId) {
-                        let dx = touch.clientX - leftStartX;
-                        let dy = touch.clientY - leftStartY;
-                        let distance = Math.sqrt(dx * dx + dy * dy);
-                        let angle = Math.atan2(dy, dx);
-                        if (distance > 75) distance = 75; // Clamp to radius
-                        direction.x = (dx / 75);
-                        direction.z = (dy / 75);
+                    if (touch.identifier === gameState.leftTouchId) {
+                        let dx = touch.clientX - gameState.leftStart.x;
+                        let dy = touch.clientY - gameState.leftStart.y;
+                        let dist = Math.sqrt(dx * dx + dy * dy);
+                        if (dist > 75) {
+                            dx = dx * 75 / dist;
+                            dy = dy * 75 / dist;
+                        }
+                        gameState.direction.x = dx / 75;
+                        gameState.direction.z = dy / 75;
+                        updateThumb(gameState.leftThumb, 75 + dx, 75 + dy);
                     }
-                    if (touch.identifier === rightJoystickTouchId) {
-                        let dx = touch.clientX - rightStartX;
-                        let dy = touch.clientY - rightStartY;
-                        yaw -= dx * 0.002;
-                        pitch -= dy * 0.002;
-                        pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitch));
-                        rightStartX = touch.clientX;
-                        rightStartY = touch.clientY;
+                    if (touch.identifier === gameState.rightTouchId) {
+                        let dx = touch.clientX - gameState.rightStart.x;
+                        let dy = touch.clientY - gameState.rightStart.y;
+                        gameState.yaw -= dx * 0.005;
+                        gameState.pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, gameState.pitch - dy * 0.005));
+                        gameState.rightStart.set(touch.clientX, touch.clientY);
                     }
                 }
             }, { passive: false });
 
             document.addEventListener('touchend', (e) => {
                 for (let touch of e.changedTouches) {
-                    if (touch.identifier === leftJoystickTouchId) {
-                        direction.x = 0;
-                        direction.z = 0;
-                        leftJoystickTouchId = null;
+                    if (touch.identifier === gameState.leftTouchId) {
+                        gameState.direction.set(0, 0, 0);
+                        gameState.leftTouchId = null;
+                        updateThumb(gameState.leftThumb, 75, 75);
                     }
-                    if (touch.identifier === rightJoystickTouchId) {
-                        rightJoystickTouchId = null;
+                    if (touch.identifier === gameState.rightTouchId) {
+                        gameState.rightTouchId = null;
+                        updateThumb(gameState.rightThumb, 75, 75);
                     }
                 }
             });
 
             // Action buttons
-            document.getElementById('jump').addEventListener('touchstart', () => isJumping = true);
+            document.getElementById('jump').addEventListener('touchstart', () => gameState.isJumping = true);
             document.getElementById('shoot').addEventListener('touchstart', shoot);
-            document.getElementById('sprint').addEventListener('touchstart', () => isSprinting = true);
-            document.getElementById('sprint').addEventListener('touchend', () => isSprinting = false);
-            document.getElementById('build').addEventListener('touchstart', build);
+            document.getElementById('sprint').addEventListener('touchstart', () => gameState.isSprinting = true);
+            document.getElementById('sprint').addEventListener('touchend', () => gameState.isSprinting = false);
+            document.getElementById('wall').addEventListener('touchstart', () => build('wall'));
+            document.getElementById('floor').addEventListener('touchstart', () => build('floor'));
+            document.getElementById('ramp').addEventListener('touchstart', () => build('ramp'));
             document.getElementById('slide').addEventListener('touchstart', slide);
-        }
 
-        function setupKeyboardControls() {
-            const keys = {};
-            document.addEventListener('keydown', (e) => {
-                keys[e.key.toLowerCase()] = true;
-                if (e.key === ' ') isJumping = true;
-                if (e.key.toLowerCase() === 'f') shoot();
-                if (e.key.toLowerCase() === 'b') build();
-                if (e.key.toLowerCase() === 'c') slide();
-            });
-            document.addEventListener('keyup', (e) => {
-                keys[e.key.toLowerCase()] = false;
-            });
+            // Keyboard controls
+            document.addEventListener('keydown', (e) => gameState.keys[e.key.toLowerCase()] = true);
+            document.addEventListener('keyup', (e) => gameState.keys[e.key.toLowerCase()] = false);
 
-            // In animate, check keys for direction
-            // This will be handled in updateMovement
-        }
-
-        function setupMouseControls() {
+            // Mouse controls
             document.addEventListener('mousemove', (e) => {
-                if (document.pointerLockElement === renderer.domElement) {
-                    yaw -= e.movementX * 0.002;
-                    pitch -= e.movementY * 0.002;
-                    pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitch));
+                if (document.pointerLockElement === gameState.renderer.domElement) {
+                    gameState.yaw -= e.movementX * 0.002;
+                    gameState.pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, gameState.pitch - e.movementY * 0.002));
                 }
             });
-            renderer.domElement.addEventListener('click', () => {
-                renderer.domElement.requestPointerLock();
+            gameState.renderer.domElement.addEventListener('click', () => gameState.renderer.domElement.requestPointerLock());
+
+            // Window resize
+            window.addEventListener('resize', () => {
+                gameState.camera.aspect = window.innerWidth / window.innerHeight;
+                gameState.camera.updateProjectionMatrix();
+                gameState.renderer.setSize(window.innerWidth, window.innerHeight);
             });
         }
 
-        function onWindowResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
+        function updateThumb(thumb, x, y) {
+            thumb.style.left = `${x}px`;
+            thumb.style.top = `${y}px`;
         }
 
         function updateMovement(delta) {
-            const currentSpeed = isSliding ? 15 : (isSprinting ? 8 : 5);
-            velocity.x = 0;
-            velocity.z = 0;
+            if (!gameState.player) return;
+            const currentSpeed = gameState.isSliding ? 15 : (gameState.isSprinting ? 8 : gameState.moveSpeed);
+            gameState.velocity.x = 0;
+            gameState.velocity.z = 0;
 
-            // From joystick
-            if (direction.x !== 0 || direction.z !== 0) {
-                let moveDirection = new THREE.Vector3(direction.x, 0, direction.z).normalize().multiplyScalar(currentSpeed);
-                moveDirection.applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-                velocity.x = moveDirection.x;
-                velocity.z = moveDirection.z;
+            // Joystick
+            if (gameState.direction.lengthSq() > 0) {
+                const moveDir = gameState.direction.clone().normalize().multiplyScalar(currentSpeed);
+                moveDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), gameState.yaw);
+                gameState.velocity.x += moveDir.x;
+                gameState.velocity.z += moveDir.z;
             }
 
-            // From keyboard (override or add if no joystick)
-            const keys = document.keys || {}; // Assuming keys from keydown
-            let keyDirection = new THREE.Vector3();
-            if (keys['w'] || keys['arrowup']) keyDirection.z -= 1;
-            if (keys['s'] || keys['arrowdown']) keyDirection.z += 1;
-            if (keys['a'] || keys['arrowleft']) keyDirection.x -= 1;
-            if (keys['d'] || keys['arrowright']) keyDirection.x += 1;
-            if (keys['shift']) isSprinting = true; else isSprinting = false;
-            if (keyDirection.length() > 0) {
-                keyDirection.normalize().multiplyScalar(currentSpeed);
-                keyDirection.applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-                velocity.x = keyDirection.x;
-                velocity.z = keyDirection.z;
+            // Keyboard
+            const keyDir = new THREE.Vector3();
+            if (gameState.keys['w'] || gameState.keys['arrowup']) keyDir.z -= 1;
+            if (gameState.keys['s'] || gameState.keys['arrowdown']) keyDir.z += 1;
+            if (gameState.keys['a'] || gameState.keys['arrowleft']) keyDir.x -= 1;
+            if (gameState.keys['d'] || gameState.keys['arrowright']) keyDir.x += 1;
+            if (gameState.keys[' '] && !gameState.isJumping) gameState.isJumping = true;
+            if (gameState.keys['shift']) gameState.isSprinting = true;
+            if (gameState.keys['f']) shoot();
+            if (gameState.keys['1']) build('wall');
+            if (gameState.keys['2']) build('floor');
+            if (gameState.keys['3']) build('ramp');
+            if (gameState.keys['c']) slide();
+            if (keyDir.lengthSq() > 0) {
+                keyDir.normalize().multiplyScalar(currentSpeed);
+                keyDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), gameState.yaw);
+                gameState.velocity.x += keyDir.x;
+                gameState.velocity.z += keyDir.z;
             }
 
-            player.position.x += velocity.x * delta;
-            player.position.z += velocity.z * delta;
-            player.rotation.y = yaw;
+            // Gamepad
+            const gamepads = navigator.getGamepads();
+            if (gamepads[0]) {
+                const gp = gamepads[0];
+                const gpDir = new THREE.Vector3(gp.axes[0], 0, gp.axes[1]).normalize().multiplyScalar(currentSpeed);
+                gpDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), gameState.yaw);
+                gameState.velocity.x += gpDir.x;
+                gameState.velocity.z += gpDir.z;
+                gameState.yaw -= gp.axes[2] * 0.05;
+                gameState.pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, gameState.pitch - gp.axes[3] * 0.05));
+                if (gp.buttons[0].pressed) gameState.isJumping = true;
+                if (gp.buttons[2].pressed) shoot();
+                if (gp.buttons[1].pressed) slide();
+                if (gp.buttons[5].pressed) gameState.isSprinting = true;
+            }
+
+            gameState.player.position.x += gameState.velocity.x * delta;
+            gameState.player.position.z += gameState.velocity.z * delta;
+            gameState.player.rotation.y = gameState.yaw;
         }
 
         function updatePhysics(delta) {
-            velocity.y -= 9.81 * delta;
-            player.position.y += velocity.y * delta;
+            if (!gameState.player) return;
+            gameState.velocity.y -= 9.81 * delta * 2;
+            gameState.player.position.y += gameState.velocity.y * delta;
 
-            const onGround = player.position.y <= 1;
-            if (onGround) {
-                player.position.y = 1;
-                velocity.y = 0;
-                if (isJumping) {
-                    velocity.y = 7;
-                    isJumping = false;
+            if (gameState.player.position.y <= 0) {
+                gameState.player.position.y = 0;
+                gameState.velocity.y = 0;
+                if (gameState.isJumping) {
+                    gameState.velocity.y = 10;
+                    gameState.isJumping = false;
                 }
             }
         }
 
         function updateCamera() {
-            const offset = new THREE.Vector3(0, 5, 10).applyEuler(new THREE.Euler(pitch, yaw, 0, 'XYZ'));
-            camera.position.copy(player.position).add(offset);
-            camera.lookAt(player.position.clone().add(new THREE.Vector3(0, 1, 0)));
+            if (!gameState.player) return;
+            const offset = new THREE.Vector3(0, 3, 8).applyEuler(new THREE.Euler(gameState.pitch, gameState.yaw, 0, 'XYZ'));
+            gameState.camera.position.copy(gameState.player.position).add(offset);
+            gameState.camera.lookAt(gameState.player.position.clone().add(new THREE.Vector3(0, 1.5, 0)));
         }
 
         function updateProjectiles(delta) {
-            for (let i = projectiles.length - 1; i >= 0; i--) {
-                const proj = projectiles[i];
+            for (let i = gameState.projectiles.length - 1; i >= 0; i--) {
+                const proj = gameState.projectiles[i];
                 proj.position.add(proj.velocity.clone().multiplyScalar(delta));
-                if (proj.position.length() > 200) {
-                    scene.remove(proj);
-                    projectiles.splice(i, 1);
+                if (proj.position.length() > 500) {
+                    gameState.scene.remove(proj);
+                    gameState.projectiles.splice(i, 1);
                 }
             }
         }
 
         function shoot() {
-            const geometry = new THREE.SphereGeometry(0.2, 16, 16);
-            const material = new THREE.MeshBasicMaterial({ color: 0x0000ff });
+            if (!gameState.player) return;
+            const geometry = new THREE.SphereGeometry(0.1, 8, 8);
+            const material = new THREE.MeshStandardMaterial({ color: 0xff0000 });
             const bullet = new THREE.Mesh(geometry, material);
-            bullet.position.copy(player.position.clone().add(new THREE.Vector3(0, 1, 0)));
-            const shootDirection = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(pitch, yaw, 0));
-            bullet.velocity = shootDirection.multiplyScalar(50);
-            scene.add(bullet);
-            projectiles.push(bullet);
+            const bulletPos = new THREE.Vector3();
+            if (gameState.gun) gameState.gun.getWorldPosition(bulletPos);
+            else bulletPos.copy(gameState.player.position).add(new THREE.Vector3(0, 1, 0));
+            bullet.position.copy(bulletPos);
+            const shootDir = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(gameState.pitch, gameState.yaw, 0, 'XYZ'));
+            bullet.velocity = shootDir.multiplyScalar(100);
+            gameState.scene.add(bullet);
+            gameState.projectiles.push(bullet);
         }
 
-        function build() {
-            const geometry = new THREE.BoxGeometry(3, 3, 0.5);
-            const material = new THREE.MeshBasicMaterial({ color: 0x808080 });
-            const wall = new THREE.Mesh(geometry, material);
-            const buildOffset = new THREE.Vector3(0, 0, -4).applyEuler(new THREE.Euler(0, yaw, 0));
-            wall.position.copy(player.position).add(buildOffset);
-            wall.position.y = 1.5;
-            wall.rotation.y = yaw;
-            scene.add(wall);
+        function build(type) {
+            if (!gameState.player) return;
+            let geometry;
+            if (type === 'wall') geometry = new THREE.PlaneGeometry(4, 4);
+            else if (type === 'floor') geometry = new THREE.PlaneGeometry(4, 4);
+            else if (type === 'ramp') geometry = new THREE.PlaneGeometry(4, 4 * Math.sqrt(2));
+            const mesh = new THREE.Mesh(geometry, gameState.buildMaterial);
+            const offset = new THREE.Vector3(0, 0, -5).applyAxisAngle(new THREE.Vector3(0, 1, 0), gameState.yaw);
+            mesh.position.copy(gameState.player.position).add(offset);
+            if (type === 'wall') {
+                mesh.position.y = 2;
+                mesh.rotation.y = gameState.yaw;
+            } else if (type === 'floor') {
+                mesh.rotation.x = -Math.PI / 2;
+                mesh.position.y = gameState.player.position.y;
+            } else if (type === 'ramp') {
+                mesh.position.y = 2;
+                mesh.rotation.set(-Math.PI / 4, gameState.yaw, 0);
+            }
+            gameState.scene.add(mesh);
         }
 
         function slide() {
-            if (isSliding) return;
-            isSliding = true;
-            player.scale.y = 0.5;
-            player.position.y = 0.5;
-            setTimeout(() => {
-                isSliding = false;
-                player.scale.y = 1;
-                player.position.y = 1;
-            }, 1000);
+            if (!gameState.player || gameState.isSliding) return;
+            gameState.isSliding = true;
+            gameState.slideTimer = 1;
+            gameState.player.scale.y = 0.5;
+            gameState.player.position.y = 0.5;
+        }
+
+        function updateSlide(delta) {
+            if (!gameState.isSliding) return;
+            gameState.slideTimer -= delta;
+            if (gameState.slideTimer <= 0) {
+                gameState.isSliding = false;
+                if (gameState.player) {
+                    gameState.player.scale.y = 1;
+                    gameState.player.position.y = 1;
+                }
+            }
         }
 
         function animate() {
             requestAnimationFrame(animate);
-            const delta = clock.getDelta();
+            const delta = gameState.clock.getDelta();
 
             updateMovement(delta);
             updatePhysics(delta);
+            updateSlide(delta);
             updateCamera();
             updateProjectiles(delta);
-
-            renderer.render(scene, camera);
+            gameState.renderer.render(gameState.scene, gameState.camera);
         }
+
+        // Initialize game
+        setupScene();
+        createPlayer();
+        createBuildings();
+        setupControls();
+        animate();
     </script>
 </body>
 </html>
